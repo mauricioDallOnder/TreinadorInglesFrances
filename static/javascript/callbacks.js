@@ -548,128 +548,70 @@ const playWithMozillaApi = (text) => {
     }
 }
 const playRecordedWord = (word_idx) => {
-    
-    let adjustedStartTime, adjustedEndTime;
-    
+    // Garante que os tempos são arrays de números
+    const startTimes = (startTime || '').split(' ').map(t => parseFloat(t)).filter(t => !isNaN(t));
+    const endTimes = (endTime || '').split(' ').map(t => parseFloat(t)).filter(t => !isNaN(t));
+
+    if (word_idx >= startTimes.length || word_idx >= endTimes.length) {
+        console.error(`Índice de palavra (${word_idx}) fora do intervalo.`);
+        return;
+    }
+
+    let adjustedStartTime = startTimes[word_idx];
+    let adjustedEndTime = endTimes[word_idx];
+
     if (AILanguage === 'fr') {
-        // French-specific intelligent correction while keeping recorded audio
-        const correctedTimes = correctFrenchWordTiming(word_idx);
+        // Aplica uma correção mais suave para o francês
+        const correctedTimes = correctFrenchWordTiming(word_idx, startTimes, endTimes);
         adjustedStartTime = correctedTimes.start;
         adjustedEndTime = correctedTimes.end;
-    } else {
-        // For other languages (English works fine), use original logic
-        adjustedStartTime = parseFloat(startTime.split(' ')[word_idx]);
-        adjustedEndTime = parseFloat(endTime.split(' ')[word_idx]);
+    }
+
+    // Validação final para garantir que o tempo de fim seja maior que o de início
+    if (adjustedEndTime <= adjustedStartTime) {
+        // Se a duração for inválida, cria uma duração mínima segura (ex: 300ms)
+        adjustedEndTime = adjustedStartTime + 0.3; 
     }
     
-    // Always use recorded audio (user's voice) - this is essential for learning
+    console.log(`Reproduzindo áudio: Início: ${adjustedStartTime.toFixed(2)}s, Fim: ${adjustedEndTime.toFixed(2)}s`);
     playRecording(adjustedStartTime, adjustedEndTime);
 };
 
-const correctFrenchWordTiming = (word_idx) => {
-    try {
-        const startTimes = startTime.split(' ').map(t => parseFloat(t));
-        const endTimes = endTime.split(' ').map(t => parseFloat(t));
-        
-        if (word_idx >= startTimes.length || word_idx >= endTimes.length) {
-            // Fallback to original if index is out of range
-            return {
-                start: startTimes[word_idx] || 0,
-                end: endTimes[word_idx] || 1
-            };
+const correctFrenchWordTiming = (word_idx, startTimes, endTimes) => {
+    let correctedStart = startTimes[word_idx];
+    let correctedEnd = endTimes[word_idx];
+
+    // Estratégia 1: Corrigir sobreposição com a palavra anterior
+    if (word_idx > 0) {
+        const previousEndTime = endTimes[word_idx - 1];
+        if (correctedStart < previousEndTime) {
+            // Se a palavra atual começar antes do fim da anterior, ajusta o início para logo após.
+            // Isso evita a reprodução do final da palavra anterior.
+            correctedStart = previousEndTime + 0.01; // Um pequeno gap de 10ms
+            console.log(`Correção de sobreposição: Início ajustado para ${correctedStart.toFixed(2)}s`);
         }
-        
-        let correctedStart = startTimes[word_idx];
-        let correctedEnd = endTimes[word_idx];
-        
-        // Get current text to estimate word length
-        const currentUserText = getCurrentText();
-        let textToUse = currentUserText;
-        if (!textToUse || textToUse.length === 0) {
-            textToUse = currentText && currentText[0] ? currentText[0] : '';
-        }
-        
-        if (textToUse) {
-            const cleanText = textToUse.replace(/<[^>]*>?/gm, '').trim().replace(/\s\s+/g, ' ');
-            const words = cleanText.split(' ');
-            
-            if (word_idx < words.length) {
-                const currentWord = words[word_idx].replace(/[.,;:!?()[\]{}""'']/g, '').trim();
-                
-                // Estimate expected duration based on word length (French-specific)
-                const estimatedDuration = Math.max(0.3, Math.min(2.0, currentWord.length * 0.15));
-                
-                // Correction strategy for French
-                if (word_idx > 0) {
-                    // Ensure we don't start before the previous word ends
-                    const previousEnd = endTimes[word_idx - 1];
-                    const originalStart = startTimes[word_idx];
-                    
-                    // If there's overlap, adjust start time
-                    if (originalStart < previousEnd) {
-                        correctedStart = previousEnd + 0.05; // Small gap
-                    } else {
-                        correctedStart = originalStart;
-                    }
-                    
-                    // Adjust end time based on estimated duration
-                    const originalDuration = endTimes[word_idx] - startTimes[word_idx];
-                    
-                    if (originalDuration < 0.2) {
-                        // Duration too short, extend it
-                        correctedEnd = correctedStart + estimatedDuration;
-                    } else if (originalDuration > 3.0) {
-                        // Duration too long, limit it
-                        correctedEnd = correctedStart + Math.min(estimatedDuration * 1.5, 2.0);
-                    } else {
-                        // Duration seems reasonable, but ensure it doesn't overlap with next word
-                        if (word_idx < startTimes.length - 1) {
-                            const nextStart = startTimes[word_idx + 1];
-                            correctedEnd = Math.min(endTimes[word_idx], nextStart - 0.05);
-                        } else {
-                            correctedEnd = endTimes[word_idx];
-                        }
-                    }
-                } else {
-                    // First word - just ensure reasonable duration
-                    const originalDuration = endTimes[word_idx] - startTimes[word_idx];
-                    
-                    if (originalDuration < 0.2) {
-                        correctedEnd = correctedStart + estimatedDuration;
-                    } else if (originalDuration > 3.0) {
-                        correctedEnd = correctedStart + Math.min(estimatedDuration * 1.5, 2.0);
-                    } else {
-                        correctedEnd = endTimes[word_idx];
-                    }
-                }
-                
-                // Final validation
-                if (correctedEnd <= correctedStart) {
-                    correctedEnd = correctedStart + 0.5; // Minimum duration
-                }
-                
-                // Ensure we don't go beyond the total recording duration
-                if (audioRecorded && audioRecorded.duration) {
-                    correctedEnd = Math.min(correctedEnd, audioRecorded.duration);
-                }
-                
-                console.log(`French word correction for "${currentWord}": ${startTimes[word_idx].toFixed(2)}-${endTimes[word_idx].toFixed(2)} → ${correctedStart.toFixed(2)}-${correctedEnd.toFixed(2)}`);
-            }
-        }
-        
-        return {
-            start: correctedStart,
-            end: correctedEnd
-        };
-        
-    } catch (error) {
-        console.error('Error in correctFrenchWordTiming:', error);
-        // Fallback to original times
-        return {
-            start: parseFloat(startTime.split(' ')[word_idx]) || 0,
-            end: parseFloat(endTime.split(' ')[word_idx]) || 1
-        };
     }
+
+    // Estratégia 2: Garantir que a palavra não invada a próxima
+    if (word_idx < startTimes.length - 1) {
+        const nextStartTime = startTimes[word_idx + 1];
+        if (correctedEnd > nextStartTime) {
+            // Se a palavra atual terminar depois do início da próxima, ajusta o fim.
+            // Isso evita que o início da próxima palavra seja reproduzido junto.
+            correctedEnd = nextStartTime - 0.01; // Termina 10ms antes da próxima começar
+            console.log(`Correção de sobreposição: Fim ajustado para ${correctedEnd.toFixed(2)}s`);
+        }
+    }
+    
+    // Evita durações negativas após as correções
+    if (correctedEnd < correctedStart) {
+        correctedEnd = correctedStart + 0.1; // Garante uma duração mínima
+    }
+
+    return {
+        start: correctedStart,
+        end: correctedEnd
+    };
 };
 
 // ############# Utils #####################
